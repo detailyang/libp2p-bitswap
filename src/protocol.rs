@@ -36,7 +36,7 @@ impl<MH: MultihashDigest> UpgradeInfo for BitswapConfig<MH> {
     type InfoIter = iter::Once<Self::Info>;
 
     fn protocol_info(&self) -> Self::InfoIter {
-        iter::once(b"/ipfs/bitswap/1.1.0")
+        iter::once(b"/chain/ipfs/bitswap/1.1.0")
     }
 }
 
@@ -67,7 +67,7 @@ impl<MH: MultihashDigest> UpgradeInfo for BitswapMessage<MH> {
     type InfoIter = iter::Once<Self::Info>;
 
     fn protocol_info(&self) -> Self::InfoIter {
-        iter::once(b"/ipfs/bitswap/1.1.0")
+        iter::once(b"/chain/ipfs/bitswap/1.1.0")
     }
 }
 
