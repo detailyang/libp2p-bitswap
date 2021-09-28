@@ -8,20 +8,20 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/ipfs-rust/libp2p-bitswap"
 
 [build-dependencies]
-prost-build = "0.6.1"
+prost-build = "0.8"
 
 [dependencies]
 async-std = { version = "1.8", features = ["attributes"] }
 tiny-cid = "0.2.0"
 fnv = "1.0.7"
 futures = "0.3.5"
-libp2p = { version = "0.28.0", default-features = false }
+libp2p = { version = "0.39", default-features = false }
 log = "0.4.11"
 tiny-multihash = "0.4.0"
-prost = "0.7"
+prost = "0.8"
 thiserror = "1.0.20"
 unsigned-varint = "0.5.0"
 
 [dev-dependencies]
 env_logger = "0.8"
-libp2p = "0.33.0"
+libp2p = "0.39"

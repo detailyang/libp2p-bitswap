@@ -54,7 +54,7 @@ where
     fn upgrade_inbound(self, mut socket: TSocket, info: Self::Info) -> Self::Future {
         Box::pin(async move {
             log::debug!("upgrade_inbound: {}", std::str::from_utf8(info).unwrap());
-            let packet = upgrade::read_one(&mut socket, MAX_BUF_SIZE).await?;
+            let packet = upgrade::read_length_prefixed(&mut socket, MAX_BUF_SIZE).await?;
             let message = BitswapMessage::from_bytes(&packet)?;
             log::debug!("inbound message: {:?}", message);
             Ok(message)
@@ -86,7 +86,7 @@ where
         Box::pin(async move {
             log::debug!("upgrade_outbound: {}", std::str::from_utf8(info).unwrap());
             let bytes = self.to_bytes();
-            upgrade::write_one(&mut socket, bytes).await?;
+            upgrade::write_length_prefixed(&mut socket, bytes).await?;
             Ok(())
         })
     }
