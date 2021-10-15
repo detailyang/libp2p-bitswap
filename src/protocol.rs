@@ -8,6 +8,7 @@ use crate::message::BitswapMessage;
 use core::future::Future;
 use core::iter;
 use core::pin::Pin;
+use futures::AsyncWriteExt;
 use futures::io::{AsyncRead, AsyncWrite};
 use libp2p::core::{upgrade, InboundUpgrade, OutboundUpgrade, UpgradeInfo};
 use std::io;
@@ -56,6 +57,7 @@ where
             log::debug!("upgrade_inbound: {}", std::str::from_utf8(info).unwrap());
             let packet = upgrade::read_length_prefixed(&mut socket, MAX_BUF_SIZE).await?;
             let message = BitswapMessage::from_bytes(&packet)?;
+            socket.close().await?;
             log::debug!("inbound message: {:?}", message);
             Ok(message)
         })
@@ -87,6 +89,7 @@ where
             log::debug!("upgrade_outbound: {}", std::str::from_utf8(info).unwrap());
             let bytes = self.to_bytes();
             upgrade::write_length_prefixed(&mut socket, bytes).await?;
+            socket.close().await?;
             Ok(())
         })
     }
