@@ -14,7 +14,7 @@ use futures::task::Context;
 use futures::task::Poll;
 use libp2p::core::connection::ConnectionId;
 use libp2p::core::{Multiaddr, PeerId};
-use libp2p::swarm::protocols_handler::{IntoProtocolsHandler, OneShotHandler, ProtocolsHandler};
+use libp2p::swarm::protocols_handler::OneShotHandler;
 use libp2p::swarm::{
     DialPeerCondition, NetworkBehaviour, NetworkBehaviourAction, NotifyHandler, PollParameters,
 };
@@ -30,9 +30,17 @@ pub enum BitswapEvent {
 }
 
 /// Network behaviour that handles sending and receiving IPFS blocks.
-pub struct Bitswap<MH = tiny_multihash::Multihash> {
+pub struct Bitswap<MH = tiny_multihash::Multihash>
+where
+    MH: tiny_multihash::MultihashDigest,
+{
     /// Queue of events to report to the user.
-    events: VecDeque<NetworkBehaviourAction<BitswapMessage<MH>, BitswapEvent>>,
+    events: VecDeque<
+        NetworkBehaviourAction<
+            BitswapEvent,
+            OneShotHandler<BitswapConfig<MH>, BitswapMessage<MH>, BitswapMessage<MH>>,
+        >,
+    >,
     /// List of peers to send messages to.
     target_peers: FnvHashSet<PeerId>,
     /// Ledger
@@ -41,7 +49,10 @@ pub struct Bitswap<MH = tiny_multihash::Multihash> {
     wanted_blocks: HashMap<Cid, Priority>,
 }
 
-impl<MH> Default for Bitswap<MH> {
+impl<MH> Default for Bitswap<MH>
+where
+    MH: tiny_multihash::MultihashDigest,
+{
     fn default() -> Self {
         Self {
             events: Default::default(),
@@ -71,9 +82,11 @@ impl<MH: MultihashDigest> Bitswap<MH> {
             return;
         }
         log::trace!("  queuing dial_peer to {}", peer_id.to_base58());
+        let handler = self.new_handler();
         self.events.push_back(NetworkBehaviourAction::DialPeer {
             peer_id,
             condition: DialPeerCondition::NotDialing,
+            handler,
         });
     }
 
@@ -237,9 +250,11 @@ impl<MH: MultihashDigest> NetworkBehaviour for Bitswap<MH> {
     }
 
     #[allow(clippy::type_complexity)]
-    fn poll(&mut self, _: &mut Context, _: &mut impl PollParameters)
-        -> Poll<NetworkBehaviourAction<<<Self::ProtocolsHandler as IntoProtocolsHandler>::Handler as ProtocolsHandler>::InEvent, Self::OutEvent>>
-    {
+    fn poll(
+        &mut self,
+        _: &mut Context,
+        _: &mut impl PollParameters,
+    ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ProtocolsHandler>> {
         if let Some(event) = self.events.pop_front() {
             return Poll::Ready(event);
         }
