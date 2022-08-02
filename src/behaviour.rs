@@ -208,12 +208,14 @@ impl<MH: MultihashDigest> NetworkBehaviour for Bitswap<MH> {
         _connection_id: &ConnectionId,
         _endpoint: &libp2p::core::ConnectedPoint,
         _failed_addresses: Option<&Vec<Multiaddr>>,
-        _other_established: usize,
+        other_established: usize,
     ) {
         log::trace!("inject_connection_established {}", peer_id.to_base58());
-        let ledger = Ledger::new();
-        self.connected_peers.insert(*peer_id, ledger);
-        self.send_want_list(peer_id);
+        if other_established == 0 {
+            let ledger = Ledger::new();
+            self.connected_peers.insert(*peer_id, ledger);
+            self.send_want_list(peer_id);
+        }
     }
 
     fn inject_connection_closed(
@@ -222,10 +224,12 @@ impl<MH: MultihashDigest> NetworkBehaviour for Bitswap<MH> {
         _connection_id: &ConnectionId,
         _endpoint: &libp2p::core::ConnectedPoint,
         _handler: <Self::ConnectionHandler as libp2p::swarm::IntoConnectionHandler>::Handler,
-        _remaining_established: usize,
+        remaining_established: usize,
     ) {
         log::trace!("inject_connection_closed {}", peer_id.to_base58());
-        self.connected_peers.remove(peer_id);
+        if remaining_established == 0 {
+            self.connected_peers.remove(peer_id);
+        }
     }
 
     fn inject_event(
