@@ -14,9 +14,9 @@ use futures::task::Context;
 use futures::task::Poll;
 use libp2p::core::connection::ConnectionId;
 use libp2p::core::{Multiaddr, PeerId};
-use libp2p::swarm::protocols_handler::OneShotHandler;
+use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
 use libp2p::swarm::{
-    DialPeerCondition, NetworkBehaviour, NetworkBehaviourAction, NotifyHandler, PollParameters,
+    NetworkBehaviour, NetworkBehaviourAction, NotifyHandler, OneShotHandler, PollParameters,
 };
 use std::collections::{HashMap, VecDeque};
 use tiny_cid::Cid;
@@ -29,18 +29,18 @@ pub enum BitswapEvent {
     ReceivedCancel(PeerId, Cid),
 }
 
+type BitswapAction<MH> = NetworkBehaviourAction<
+    BitswapEvent,
+    OneShotHandler<BitswapConfig<MH>, BitswapMessage<MH>, BitswapMessage<MH>>,
+>;
+
 /// Network behaviour that handles sending and receiving IPFS blocks.
 pub struct Bitswap<MH = tiny_multihash::Multihash>
 where
     MH: tiny_multihash::MultihashDigest,
 {
     /// Queue of events to report to the user.
-    events: VecDeque<
-        NetworkBehaviourAction<
-            BitswapEvent,
-            OneShotHandler<BitswapConfig<MH>, BitswapMessage<MH>, BitswapMessage<MH>>,
-        >,
-    >,
+    events: VecDeque<BitswapAction<MH>>,
     /// List of peers to send messages to.
     target_peers: FnvHashSet<PeerId>,
     /// Ledger
@@ -78,14 +78,15 @@ impl<MH: MultihashDigest> Bitswap<MH> {
     /// Called from discovery protocols like mdns or kademlia.
     pub fn connect(&mut self, peer_id: PeerId) {
         log::trace!("connect");
-        if !self.target_peers.insert(peer_id.clone()) {
+        if !self.target_peers.insert(peer_id) {
             return;
         }
         log::trace!("  queuing dial_peer to {}", peer_id.to_base58());
         let handler = self.new_handler();
-        self.events.push_back(NetworkBehaviourAction::DialPeer {
-            peer_id,
-            condition: DialPeerCondition::NotDialing,
+        self.events.push_back(NetworkBehaviourAction::Dial {
+            opts: DialOpts::peer_id(peer_id)
+                .condition(PeerCondition::NotDialing)
+                .build(),
             handler,
         });
     }
@@ -106,7 +107,7 @@ impl<MH: MultihashDigest> Bitswap<MH> {
     pub fn send_block_all(&mut self, cid: &Cid, data: &[u8]) {
         let peers: Vec<_> = self.peers_want(cid).cloned().collect();
         for peer_id in &peers {
-            self.send_block(&peer_id, cid.clone(), data.to_vec().into_boxed_slice());
+            self.send_block(peer_id, *cid, data.to_vec().into_boxed_slice());
         }
     }
 
@@ -157,20 +158,20 @@ impl<MH: MultihashDigest> Bitswap<MH> {
                 .map(|ledger| {
                     ledger
                         .wantlist()
-                        .map(|(cid, priority)| (cid.clone(), priority))
+                        .map(|(cid, priority)| (*cid, priority))
                         .collect()
                 })
                 .unwrap_or_default()
         } else {
             self.wanted_blocks
                 .iter()
-                .map(|(cid, priority)| (cid.clone(), *priority))
+                .map(|(cid, priority)| (*cid, *priority))
                 .collect()
         }
     }
 
     /// Retrieves the connected bitswap peers.
-    pub fn peers<'a>(&'a self) -> impl Iterator<Item = &'a PeerId> + 'a {
+    pub fn peers(&self) -> impl Iterator<Item = &PeerId> {
         self.connected_peers.iter().map(|(peer_id, _)| peer_id)
     }
 
@@ -189,11 +190,11 @@ impl<MH: MultihashDigest> Bitswap<MH> {
 }
 
 impl<MH: MultihashDigest> NetworkBehaviour for Bitswap<MH> {
-    type ProtocolsHandler =
+    type ConnectionHandler =
         OneShotHandler<BitswapConfig<MH>, BitswapMessage<MH>, BitswapMessage<MH>>;
     type OutEvent = BitswapEvent;
 
-    fn new_handler(&mut self) -> Self::ProtocolsHandler {
+    fn new_handler(&mut self) -> Self::ConnectionHandler {
         Default::default()
     }
 
@@ -201,15 +202,29 @@ impl<MH: MultihashDigest> NetworkBehaviour for Bitswap<MH> {
         Default::default()
     }
 
-    fn inject_connected(&mut self, peer_id: &PeerId) {
-        log::trace!("inject_connected {}", peer_id.to_base58());
+    fn inject_connection_established(
+        &mut self,
+        peer_id: &PeerId,
+        _connection_id: &ConnectionId,
+        _endpoint: &libp2p::core::ConnectedPoint,
+        _failed_addresses: Option<&Vec<Multiaddr>>,
+        _other_established: usize,
+    ) {
+        log::trace!("inject_connection_established {}", peer_id.to_base58());
         let ledger = Ledger::new();
-        self.connected_peers.insert(peer_id.clone(), ledger);
+        self.connected_peers.insert(*peer_id, ledger);
         self.send_want_list(peer_id);
     }
 
-    fn inject_disconnected(&mut self, peer_id: &PeerId) {
-        log::trace!("inject_disconnected {}", peer_id.to_base58());
+    fn inject_connection_closed(
+        &mut self,
+        peer_id: &PeerId,
+        _connection_id: &ConnectionId,
+        _endpoint: &libp2p::core::ConnectedPoint,
+        _handler: <Self::ConnectionHandler as libp2p::swarm::IntoConnectionHandler>::Handler,
+        _remaining_established: usize,
+    ) {
+        log::trace!("inject_connection_closed {}", peer_id.to_base58());
         self.connected_peers.remove(peer_id);
     }
 
@@ -233,17 +248,17 @@ impl<MH: MultihashDigest> NetworkBehaviour for Bitswap<MH> {
             }
             // Cancel the block.
             self.cancel_block(&cid);
-            let event = BitswapEvent::ReceivedBlock(peer_id.clone(), cid, data);
+            let event = BitswapEvent::ReceivedBlock(peer_id, cid, data);
             self.events
                 .push_back(NetworkBehaviourAction::GenerateEvent(event));
         }
         for (cid, priority) in message.want() {
-            let event = BitswapEvent::ReceivedWant(peer_id.clone(), cid.clone(), priority);
+            let event = BitswapEvent::ReceivedWant(peer_id, *cid, priority);
             self.events
                 .push_back(NetworkBehaviourAction::GenerateEvent(event));
         }
         for cid in message.cancel() {
-            let event = BitswapEvent::ReceivedCancel(peer_id.clone(), cid.clone());
+            let event = BitswapEvent::ReceivedCancel(peer_id, *cid);
             self.events
                 .push_back(NetworkBehaviourAction::GenerateEvent(event));
         }
@@ -254,14 +269,14 @@ impl<MH: MultihashDigest> NetworkBehaviour for Bitswap<MH> {
         &mut self,
         _: &mut Context,
         _: &mut impl PollParameters,
-    ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ProtocolsHandler>> {
+    ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
         if let Some(event) = self.events.pop_front() {
             return Poll::Ready(event);
         }
         for (peer_id, ledger) in &mut self.connected_peers {
             if let Some(message) = ledger.send() {
                 return Poll::Ready(NetworkBehaviourAction::NotifyHandler {
-                    peer_id: peer_id.clone(),
+                    peer_id: *peer_id,
                     handler: NotifyHandler::Any,
                     event: message,
                 });
@@ -278,24 +293,27 @@ mod tests {
     use futures::channel::mpsc;
     use futures::prelude::*;
     use libp2p::core::muxing::StreamMuxerBox;
-    use libp2p::core::transport::boxed::Boxed;
     use libp2p::core::transport::upgrade::Version;
-    use libp2p::identity::Keypair;
-    use libp2p::secio::SecioConfig;
-    use libp2p::tcp::TcpConfig;
-    use libp2p::yamux::Config as YamuxConfig;
+    use libp2p::core::transport::Boxed;
+    use libp2p::noise::{NoiseConfig, X25519Spec};
+    use libp2p::tcp::{GenTcpConfig, TcpTransport};
+    use libp2p::yamux::YamuxConfig;
     use libp2p::{PeerId, Swarm, Transport};
     use std::io::{Error, ErrorKind};
     use std::time::Duration;
     use tiny_multihash::Multihash;
 
-    fn mk_transport() -> (PeerId, Boxed<(PeerId, StreamMuxerBox), Error>) {
-        let key = Keypair::generate_ed25519();
-        let peer_id = key.public().into_peer_id();
-        let transport = TcpConfig::new()
-            .nodelay(true)
+    fn mk_transport() -> (PeerId, Boxed<(PeerId, StreamMuxerBox)>) {
+        let key = libp2p::identity::ed25519::Keypair::generate();
+        let dh_key = libp2p::noise::Keypair::<X25519Spec>::new()
+            .into_authentic(&libp2p::core::identity::Keypair::Ed25519(key.clone()))
+            .unwrap();
+
+        let peer_id = PeerId::from_public_key(&libp2p::core::PublicKey::Ed25519(key.public()));
+
+        let transport = TcpTransport::new(GenTcpConfig::new().nodelay(true))
             .upgrade(Version::V1)
-            .authenticate(SecioConfig::new(key))
+            .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
             .multiplex(YamuxConfig::default())
             .timeout(Duration::from_secs(20))
             .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
@@ -309,10 +327,10 @@ mod tests {
         env_logger::init();
 
         let (peer1_id, trans) = mk_transport();
-        let mut swarm1 = Swarm::new(trans, Bitswap::<Multihash>::new(), peer1_id.clone());
+        let mut swarm1 = Swarm::new(trans, Bitswap::<Multihash>::new(), peer1_id);
 
         let (peer2_id, trans) = mk_transport();
-        let mut swarm2 = Swarm::new(trans, Bitswap::<Multihash>::new(), peer2_id.clone());
+        let mut swarm2 = Swarm::new(trans, Bitswap::<Multihash>::new(), peer2_id);
 
         let (mut tx, mut rx) = mpsc::channel::<Multiaddr>(1);
         Swarm::listen_on(&mut swarm1, "/ip4/127.0.0.1/tcp/0".parse().unwrap()).unwrap();
@@ -321,35 +339,43 @@ mod tests {
             cid: cid_orig,
             data: data_orig,
         } = create_block(b"hello world");
-        let cid = cid_orig.clone();
+        let cid = cid_orig;
 
         let peer1 = async move {
-            while let Some(_) = swarm1.next().now_or_never() {}
+            while swarm1.next().now_or_never().is_some() {}
 
             for l in Swarm::listeners(&swarm1) {
                 tx.send(l.clone()).await.unwrap();
             }
 
             loop {
-                match swarm1.next().await {
-                    BitswapEvent::ReceivedWant(peer_id, cid, _) => {
-                        if &cid == &cid_orig {
-                            swarm1.send_block(&peer_id, cid_orig.clone(), data_orig.clone());
-                        }
+                if let libp2p::swarm::SwarmEvent::Behaviour(BitswapEvent::ReceivedWant(
+                    peer_id,
+                    cid,
+                    _,
+                )) = swarm1.next().await.unwrap()
+                {
+                    if cid == cid_orig {
+                        swarm1
+                            .behaviour_mut()
+                            .send_block(&peer_id, cid_orig, data_orig.clone());
                     }
-                    _ => {}
                 }
             }
         };
 
         let peer2 = async move {
-            Swarm::dial_addr(&mut swarm2, rx.next().await.unwrap()).unwrap();
-            swarm2.want_block(cid, 1000);
+            Swarm::dial(&mut swarm2, rx.next().await.unwrap()).unwrap();
+            swarm2.behaviour_mut().want_block(cid, 1000);
 
             loop {
-                match swarm2.next().await {
-                    BitswapEvent::ReceivedBlock(_, _, data) => return data,
-                    _ => {}
+                if let libp2p::swarm::SwarmEvent::Behaviour(BitswapEvent::ReceivedBlock(
+                    _,
+                    _,
+                    data,
+                )) = swarm2.next().await.unwrap()
+                {
+                    return data;
                 }
             }
         };

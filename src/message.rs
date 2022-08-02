@@ -44,13 +44,13 @@ impl<MH> Default for BitswapMessage<MH> {
 impl<MH> core::fmt::Debug for BitswapMessage<MH> {
     fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {
         for (cid, priority) in self.want() {
-            writeln!(fmt, "want: {} {}", cid.to_string(), priority)?;
+            writeln!(fmt, "want: {} {}", cid, priority)?;
         }
         for cid in self.cancel() {
-            writeln!(fmt, "cancel: {}", cid.to_string())?;
+            writeln!(fmt, "cancel: {}", cid)?;
         }
         for block in self.blocks() {
-            writeln!(fmt, "block: {}", block.cid().to_string())?;
+            writeln!(fmt, "block: {}", block.cid())?;
         }
         Ok(())
     }
@@ -99,7 +99,7 @@ impl<MH> BitswapMessage<MH> {
     /// Adds a block to the want list.
     pub fn want_block(&mut self, cid: &Cid, priority: Priority) {
         self.cancel.remove(cid);
-        self.want.insert(cid.clone(), priority);
+        self.want.insert(*cid, priority);
     }
 
     /// Adds a block to the cancel list.
@@ -107,7 +107,7 @@ impl<MH> BitswapMessage<MH> {
         if self.want.contains_key(cid) {
             self.want.remove(cid);
         } else {
-            self.cancel.insert(cid.clone());
+            self.cancel.insert(*cid);
         }
     }
 
@@ -116,22 +116,27 @@ impl<MH> BitswapMessage<MH> {
         let mut proto = bitswap_pb::Message::default();
         let mut wantlist = bitswap_pb::message::Wantlist::default();
         for (cid, priority) in self.want() {
-            let mut entry = bitswap_pb::message::wantlist::Entry::default();
-            entry.block = cid.to_bytes();
-            entry.priority = priority;
+            let entry = bitswap_pb::message::wantlist::Entry {
+                block: cid.to_bytes(),
+                priority,
+                ..Default::default()
+            };
             wantlist.entries.push(entry);
         }
         for cid in self.cancel() {
-            let mut entry = bitswap_pb::message::wantlist::Entry::default();
-            entry.block = cid.to_bytes();
-            entry.cancel = true;
+            let entry = bitswap_pb::message::wantlist::Entry {
+                block: cid.to_bytes(),
+                cancel: true,
+                ..Default::default()
+            };
             wantlist.entries.push(entry);
         }
         for block in self.blocks() {
-            let mut payload = bitswap_pb::message::Block::default();
             let prefix: Prefix = block.cid().into();
-            payload.prefix = prefix.to_bytes();
-            payload.data = block.data().to_vec();
+            let payload = bitswap_pb::message::Block {
+                prefix: prefix.to_bytes(),
+                data: block.data().to_vec(),
+            };
             proto.payload.push(payload);
         }
         if !wantlist.entries.is_empty() {
@@ -203,7 +208,7 @@ mod tests {
     fn test_want_message_to_from_bytes() {
         let mut message = BitswapMessage::<Multihash>::new();
         let block = create_block(b"hello world");
-        message.want_block(&block.cid(), 1);
+        message.want_block(block.cid(), 1);
         let bytes = message.to_bytes();
         let new_message = BitswapMessage::<Multihash>::from_bytes(&bytes).unwrap();
         assert_eq!(message, new_message);
@@ -213,7 +218,7 @@ mod tests {
     fn test_cancel_message_to_from_bytes() {
         let mut message = BitswapMessage::<Multihash>::new();
         let block = create_block(b"hello world");
-        message.cancel_block(&block.cid());
+        message.cancel_block(block.cid());
         let bytes = message.to_bytes();
         let new_message = BitswapMessage::<Multihash>::from_bytes(&bytes).unwrap();
         assert_eq!(message, new_message);

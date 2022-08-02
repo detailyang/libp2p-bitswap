@@ -55,7 +55,7 @@ impl<MH: MultihashDigest> Ledger<MH> {
             self.sent_want_list.remove(cid);
         }
         for (cid, priority) in self.message.want() {
-            self.sent_want_list.insert(cid.clone(), priority);
+            self.sent_want_list.insert(*cid, priority);
         }
         Some(core::mem::replace(&mut self.message, BitswapMessage::new()))
     }
@@ -114,9 +114,9 @@ mod tests {
         let block_1 = create_block(b"1");
         let block_2 = create_block(b"2");
         let mut ledger = Ledger::<Multihash>::new();
-        ledger.want(&block_1.cid(), 1);
-        ledger.want(&block_2.cid(), 1);
-        ledger.cancel(&block_1.cid());
+        ledger.want(block_1.cid(), 1);
+        ledger.want(block_2.cid(), 1);
+        ledger.cancel(block_1.cid());
         let message = ledger.send().unwrap();
         let mut want_list = message.want();
         assert_eq!(want_list.next(), Some((block_2.cid(), 1)));
@@ -127,13 +127,13 @@ mod tests {
         let block_1 = create_block(b"1");
         let block_2 = create_block(b"2");
         let mut ledger = Ledger::<Multihash>::new();
-        ledger.want(&block_1.cid(), 1);
-        ledger.want(&block_2.cid(), 1);
+        ledger.want(block_1.cid(), 1);
+        ledger.want(block_2.cid(), 1);
         ledger.send();
-        ledger.cancel(&block_1.cid());
+        ledger.cancel(block_1.cid());
         ledger.send();
         let mut want_list = HashMap::new();
-        want_list.insert(block_2.cid().clone(), 1);
+        want_list.insert(*block_2.cid(), 1);
         assert_eq!(ledger.sent_want_list, want_list);
     }
 
@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(ledger.wantlist().next(), Some((block_1.cid(), 1)));
 
         let mut message = BitswapMessage::<Multihash>::new();
-        message.cancel_block(&block_1.cid());
+        message.cancel_block(block_1.cid());
         ledger.receive(&message);
         assert_eq!(ledger.wantlist().next(), None);
     }
