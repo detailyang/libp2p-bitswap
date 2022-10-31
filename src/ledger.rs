@@ -70,7 +70,7 @@ impl<MH: MultihashDigest> Ledger<MH> {
         }
     }
 
-    pub fn wantlist<'a>(&'a self) -> impl Iterator<Item = (&Cid, Priority)> + 'a {
+    pub fn wantlist(&self) -> impl Iterator<Item = (&Cid, Priority)> {
         self.received_want_list
             .iter()
             .map(|(cid, priority)| (cid, *priority))

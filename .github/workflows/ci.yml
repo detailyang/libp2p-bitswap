@@ -1,0 +1,29 @@
+on:
+  workflow_dispatch:
+  push:
+    branches: [forest_bitswap]
+  pull_request:
+
+name: CI
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    env:
+      CC: "sccache clang"
+      CXX: "sccache clang++"
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Setup sccache
+        uses: hanabi1224/sccache-action@v1.2.0
+        with:
+          cache-key: ${{ runner.os }}-sccache-build-test
+          cache-update: ${{ github.event_name != 'pull_request' }}
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy # No deny warnings for now
+      - run: cargo test
